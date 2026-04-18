@@ -42,13 +42,18 @@ node server.js
 3. 저장소를 연결하면 `buildCommand`, `startCommand`, `healthCheckPath`가 자동으로 적용됩니다.
 4. 배포가 끝나면 Render가 발급한 URL로 접속합니다.
 
+### Airplanes.live 기본 사용
+
+기본 공급원은 `airplanes.live` 입니다. 공식 가이드 기준으로 `point/{lat}/{lon}/{radius}` 엔드포인트를 사용하며, 반경은 최대 `250nm` 까지 지원됩니다.
+
 ### Aviationstack 사용
 
-배포 환경에서 OpenSky 연결이 불안정할 경우 `AVIATIONSTACK_ACCESS_KEY` 환경 변수를 설정하면 Aviationstack 실시간 항공편 API를 우선 사용합니다.
+`LIVE_DATA_PROVIDER` 값을 바꾸고 `AVIATIONSTACK_ACCESS_KEY` 환경 변수를 설정하면 Aviationstack 실시간 항공편 API를 사용할 수 있습니다.
 
 필요한 환경 변수:
 
 ```bash
+LIVE_DATA_PROVIDER=aviationstack
 AVIATIONSTACK_ACCESS_KEY=your_key_here
 ```
 

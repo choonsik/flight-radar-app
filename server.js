@@ -7,9 +7,11 @@ const { URL } = require("url");
 
 const DEFAULT_PORT = Number(process.env.PORT) || 3030;
 const PUBLIC_DIR = path.join(__dirname, "public");
+const AIRPLANES_LIVE_URL = "https://api.airplanes.live/v2";
 const OPENSKY_URL = "https://opensky-network.org/api/states/all";
 const AVIATIONSTACK_URL = "https://api.aviationstack.com/v1/flights";
 const AVIATIONSTACK_ACCESS_KEY = process.env.AVIATIONSTACK_ACCESS_KEY || "";
+const LIVE_DATA_PROVIDER = process.env.LIVE_DATA_PROVIDER || "airplanes-live";
 const KOREA_AIRPORT_CODES = ["ICN", "GMP", "CJU", "PUS", "TAE", "CJJ"];
 const KOREA_BOUNDS = {
   minLat: 32.5,
@@ -17,6 +19,7 @@ const KOREA_BOUNDS = {
   minLon: 124,
   maxLon: 132.5,
 };
+const AIRPLANES_LIVE_MAX_RADIUS_NM = 250;
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -94,6 +97,37 @@ function normalizeState(state) {
   };
 }
 
+function normalizeAirplanesLiveFlight(flight, now) {
+  const baroFeet = typeof flight.alt_baro === "number" ? flight.alt_baro : null;
+  const geomFeet = typeof flight.alt_geom === "number" ? flight.alt_geom : null;
+  const seenSeconds = typeof flight.seen === "number" ? flight.seen : null;
+  const seenPosSeconds = typeof flight.seen_pos === "number" ? flight.seen_pos : null;
+  const onGround = flight.alt_baro === "ground";
+
+  return {
+    icao24: (flight.hex || "").replace(/^~/, "").toLowerCase(),
+    callsign: (flight.flight || flight.r || "").trim(),
+    origin_country: flight.r || flight.t || "Unknown",
+    time_position: seenPosSeconds !== null ? Math.floor(now - seenPosSeconds) : null,
+    last_contact: seenSeconds !== null ? Math.floor(now - seenSeconds) : Math.floor(now),
+    longitude: typeof flight.lon === "number" ? flight.lon : null,
+    latitude: typeof flight.lat === "number" ? flight.lat : null,
+    baro_altitude: baroFeet !== null ? baroFeet / 3.28084 : null,
+    on_ground: onGround,
+    velocity: typeof flight.gs === "number" ? flight.gs / 1.94384 : null,
+    true_track: typeof flight.track === "number" ? flight.track : null,
+    vertical_rate: typeof flight.baro_rate === "number" ? flight.baro_rate * 0.00508 : null,
+    sensors: null,
+    geo_altitude: geomFeet !== null ? geomFeet / 3.28084 : null,
+    squawk: flight.squawk || null,
+    spi: Boolean(flight.spi),
+    position_source: 0,
+    category: flight.category || null,
+    registration: flight.r || null,
+    aircraft_type: flight.t || null,
+  };
+}
+
 function normalizeAviationStackFlight(flight) {
   const live = flight.live || {};
   const airline = flight.airline || {};
@@ -163,6 +197,10 @@ async function handleFlights(res, requestUrl) {
 }
 
 async function fetchProviderFlights(requestUrl) {
+  if (LIVE_DATA_PROVIDER === "airplanes-live") {
+    return fetchAirplanesLiveFlights(requestUrl);
+  }
+
   if (AVIATIONSTACK_ACCESS_KEY) {
     return fetchAviationStackFlights(requestUrl);
   }
@@ -177,6 +215,24 @@ async function fetchProviderFlights(requestUrl) {
     source: "opensky",
     strategy: "bbox",
   };
+}
+
+function boundsToPointQuery(searchParams) {
+  const lamin = Number(searchParams.get("lamin"));
+  const lomin = Number(searchParams.get("lomin"));
+  const lamax = Number(searchParams.get("lamax"));
+  const lomax = Number(searchParams.get("lomax"));
+
+  const lat = (lamin + lamax) / 2;
+  const lon = (lomin + lomax) / 2;
+  const latSpanNm = Math.abs(lamax - lamin) * 60;
+  const lonSpanNm = Math.abs(lomax - lomin) * 60 * Math.cos((lat * Math.PI) / 180);
+  const radiusNm = Math.min(
+    AIRPLANES_LIVE_MAX_RADIUS_NM,
+    Math.max(25, Math.ceil(Math.sqrt(latSpanNm ** 2 + lonSpanNm ** 2) / 2))
+  );
+
+  return { lat, lon, radiusNm };
 }
 
 function hasBounds(searchParams) {
@@ -270,6 +326,31 @@ async function fetchAviationStackFlights(requestUrl) {
     states,
     source: "aviationstack",
     strategy: useKoreaStrategy ? "korea-airports" : "active-flights",
+  };
+}
+
+async function fetchAirplanesLiveFlights(requestUrl) {
+  if (!hasBounds(requestUrl.searchParams)) {
+    throw new Error("Airplanes.live requires viewport bounds.");
+  }
+
+  const { lat, lon, radiusNm } = boundsToPointQuery(requestUrl.searchParams);
+  const upstreamUrl = `${AIRPLANES_LIVE_URL}/point/${lat.toFixed(4)}/${lon.toFixed(4)}/${radiusNm}`;
+  const payload = await fetchJson(upstreamUrl, { providerName: "Airplanes.live" });
+  const now = typeof payload.now === "number" ? payload.now : Math.floor(Date.now() / 1000);
+  const rawFlights = Array.isArray(payload.aircraft) ? payload.aircraft : [];
+  const states = rawFlights
+    .map((flight) => normalizeAirplanesLiveFlight(flight, now))
+    .filter((flight) => typeof flight.latitude === "number" && typeof flight.longitude === "number")
+    .filter((flight) => isWithinBounds(flight, requestUrl.searchParams));
+
+  return {
+    payload: {
+      time: now,
+    },
+    states,
+    source: "airplanes-live",
+    strategy: `point-${radiusNm}nm`,
   };
 }
 

@@ -116,6 +116,10 @@ function metersPerSecondToKnots(value) {
 }
 
 function describeSource(payload) {
+  if (payload.source === "airplanes-live") {
+    return "Airplanes.live 위치 데이터";
+  }
+
   if (payload.source === "aviationstack" && payload.strategy === "korea-airports") {
     return "Aviationstack 한국 공항 출발/도착 편";
   }
