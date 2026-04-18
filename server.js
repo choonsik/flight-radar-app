@@ -20,6 +20,16 @@ const KOREA_BOUNDS = {
   maxLon: 132.5,
 };
 const AIRPLANES_LIVE_MAX_RADIUS_NM = 250;
+const AIRPLANES_LIVE_MIN_INTERVAL_MS = 1200;
+const AIRPLANES_LIVE_CACHE_TTL_MS = 15000;
+
+const providerState = {
+  airplanesLive: {
+    lastRequestAt: 0,
+    inflight: new Map(),
+    cache: new Map(),
+  },
+};
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -335,8 +345,56 @@ async function fetchAirplanesLiveFlights(requestUrl) {
   }
 
   const { lat, lon, radiusNm } = boundsToPointQuery(requestUrl.searchParams);
-  const upstreamUrl = `${AIRPLANES_LIVE_URL}/point/${lat.toFixed(4)}/${lon.toFixed(4)}/${radiusNm}`;
-  const payload = await fetchJson(upstreamUrl, { providerName: "Airplanes.live" });
+  const latKey = lat.toFixed(2);
+  const lonKey = lon.toFixed(2);
+  const cacheKey = `${latKey}:${lonKey}:${radiusNm}`;
+  const cached = providerState.airplanesLive.cache.get(cacheKey);
+  const nowMs = Date.now();
+
+  if (cached && nowMs - cached.fetchedAt < AIRPLANES_LIVE_CACHE_TTL_MS) {
+    return cached.result;
+  }
+
+  const inflight = providerState.airplanesLive.inflight.get(cacheKey);
+  if (inflight) {
+    return inflight;
+  }
+
+  const requestPromise = (async () => {
+    const elapsed = Date.now() - providerState.airplanesLive.lastRequestAt;
+    if (elapsed < AIRPLANES_LIVE_MIN_INTERVAL_MS) {
+      await sleep(AIRPLANES_LIVE_MIN_INTERVAL_MS - elapsed);
+    }
+
+    const upstreamUrl = `${AIRPLANES_LIVE_URL}/point/${latKey}/${lonKey}/${radiusNm}`;
+    providerState.airplanesLive.lastRequestAt = Date.now();
+
+    try {
+      const payload = await fetchJson(upstreamUrl, { providerName: "Airplanes.live" });
+      const result = buildAirplanesLiveResult(payload, requestUrl, radiusNm);
+      providerState.airplanesLive.cache.set(cacheKey, {
+        fetchedAt: Date.now(),
+        result,
+      });
+      return result;
+    } catch (error) {
+      if (String(error.message).includes("429") && cached) {
+        return {
+          ...cached.result,
+          strategy: `${cached.result.strategy}-cached`,
+        };
+      }
+      throw error;
+    } finally {
+      providerState.airplanesLive.inflight.delete(cacheKey);
+    }
+  })();
+
+  providerState.airplanesLive.inflight.set(cacheKey, requestPromise);
+  return requestPromise;
+}
+
+function buildAirplanesLiveResult(payload, requestUrl, radiusNm) {
   const nowRaw = typeof payload.now === "number" ? payload.now : Date.now();
   const now = nowRaw > 10_000_000_000 ? Math.floor(nowRaw / 1000) : Math.floor(nowRaw);
   const rawFlights = Array.isArray(payload.aircraft)
@@ -357,6 +415,10 @@ async function fetchAirplanesLiveFlights(requestUrl) {
     source: "airplanes-live",
     strategy: `point-${radiusNm}nm`,
   };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function fetchOpenSkyJson(upstreamUrl) {
