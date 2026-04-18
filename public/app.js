@@ -83,6 +83,7 @@ const dom = {
 let allFlights = [];
 let currentMarkers = [];
 let trackLine = null;
+let trackHaloLine = null;
 let selectedFlightId = null;
 let lastRenderedFlightIds = "";
 let lastFetchMode = "initial";
@@ -191,11 +192,11 @@ function createPlaneIcon(onGround, heading = 0) {
     html: `
       <div class="plane-marker ${onGround ? "grounded" : "flying"}">
         <svg viewBox="0 0 64 64" aria-hidden="true" style="transform: rotate(${rotation}deg)">
-          <path d="M31.8 4c2 0 3.8 1.6 4 3.6l2.2 16.7 15 7.4c1.5.7 2.2 2.5 1.7 4.1-.6 1.7-2.4 2.8-4.2 2.4l-12.8-2.9 4.7 20.2 7.4 4.5c1.4.9 1.9 2.8 1.1 4.3-.9 1.7-2.9 2.4-4.7 1.6L32 59.8 17.8 66c-1.7.7-3.8 0-4.7-1.6-.8-1.5-.4-3.4 1.1-4.3l7.4-4.5 4.7-20.2-12.8 2.9c-1.8.4-3.6-.6-4.2-2.4-.6-1.6.1-3.4 1.7-4.1l15-7.4 2.2-16.7c.2-2 2-3.6 4-3.6Z" />
+          <path d="M32 4 36.2 20.5 51.5 26c1.4.5 1.9 2.2 1 3.4l-12.8 3.6-.9 6.8 9.6 6.7c1 .7 1.1 2.2.1 3l-2.8 2.3-9.2-4.7L34 60h-4l-2.4-12.9-9.2 4.7-2.8-2.3c-1-.8-.9-2.3.1-3l9.6-6.7-.9-6.8-12.8-3.6c-.9-1.2-.4-2.9 1-3.4l15.3-5.5L32 4Z" />
         </svg>
       </div>`,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
     popupAnchor: [0, -14],
   });
 }
@@ -229,6 +230,11 @@ function clearMarkers() {
 }
 
 function clearTrackLine() {
+  if (trackHaloLine) {
+    trackHaloLine.remove();
+    trackHaloLine = null;
+  }
+
   if (trackLine) {
     trackLine.remove();
     trackLine = null;
@@ -263,13 +269,22 @@ function renderTrackLine() {
   const track = flightTracks.get(selectedFlightId) || [];
   if (track.length < 2) return;
 
+  const latLngs = track.map((point) => [point.lat, point.lon]);
+
+  trackHaloLine = L.polyline(latLngs, {
+    color: "#fff4a8",
+    weight: 9,
+    opacity: 0.22,
+    lineCap: "round",
+  }).addTo(map);
+
   trackLine = L.polyline(
-    track.map((point) => [point.lat, point.lon]),
+    latLngs,
     {
-      color: "#7ee0ff",
-      weight: 3,
-      opacity: 0.8,
-      dashArray: "10 8",
+      color: "#ffd94d",
+      weight: 4,
+      opacity: 0.95,
+      dashArray: "14 10",
       lineCap: "round",
     }
   ).addTo(map);
@@ -288,6 +303,23 @@ function haversineKm(aLat, aLon, bLat, bLon) {
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
 
   return 2 * earthRadiusKm * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
+
+function bearingBetween(aLat, aLon, bLat, bLon) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const toDeg = (rad) => (rad * 180) / Math.PI;
+  const lat1 = toRad(aLat);
+  const lat2 = toRad(bLat);
+  const dLon = toRad(bLon - aLon);
+
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+function headingDelta(a, b) {
+  const diff = Math.abs(a - b) % 360;
+  return diff > 180 ? 360 - diff : diff;
 }
 
 function nearestAirport(lat, lon) {
@@ -309,13 +341,50 @@ function estimateRoute(flight) {
   const lastPoint = track[track.length - 1];
 
   if (!firstPoint || !lastPoint) {
-    return { departure: null, arrival: null };
+    return { departure: null, arrival: inferDestinationAirport(flight) };
   }
 
   return {
     departure: nearestAirport(firstPoint.lat, firstPoint.lon),
-    arrival: nearestAirport(lastPoint.lat, lastPoint.lon),
+    arrival: inferDestinationAirport(flight, lastPoint),
   };
+}
+
+function inferDestinationAirport(flight, fromPoint) {
+  const sourcePoint = fromPoint || {
+    lat: flight.latitude,
+    lon: flight.longitude,
+  };
+
+  if (typeof sourcePoint.lat !== "number" || typeof sourcePoint.lon !== "number") {
+    return null;
+  }
+
+  if (typeof flight.true_track !== "number") {
+    return nearestAirport(sourcePoint.lat, sourcePoint.lon);
+  }
+
+  let best = null;
+
+  KOREA_AIRPORTS.forEach((airport) => {
+    const distanceKm = haversineKm(sourcePoint.lat, sourcePoint.lon, airport.lat, airport.lon);
+    const bearing = bearingBetween(sourcePoint.lat, sourcePoint.lon, airport.lat, airport.lon);
+    const delta = headingDelta(flight.true_track, bearing);
+
+    if (delta > 95) return;
+
+    const score = distanceKm + delta * 2.4;
+    if (!best || score < best.score) {
+      best = {
+        ...airport,
+        distanceKm,
+        delta,
+        score,
+      };
+    }
+  });
+
+  return best || nearestAirport(sourcePoint.lat, sourcePoint.lon);
 }
 
 function selectedFlight() {
@@ -364,7 +433,7 @@ function updateDetailPanel() {
         <strong>${route.departure ? `${route.departure.code} ${route.departure.name}` : "-"}</strong>
       </div>
       <div class="detail-card">
-        <span>추정 도착 공항</span>
+        <span>추정 목적지</span>
         <strong>${route.arrival ? `${route.arrival.code} ${route.arrival.name}` : "-"}</strong>
       </div>
       <div class="detail-card">
@@ -571,22 +640,10 @@ function updatePresetButtons() {
 }
 
 function updateViewport(flights) {
-  const region = dom.regionSelect.value;
-  const renderedIds = flights.map((flight) => flight.icao24).join(",");
-
-  if (renderedIds === lastRenderedFlightIds) return;
-  lastRenderedFlightIds = renderedIds;
-
   if (activePreset && AIRPORT_PRESETS[activePreset]) {
     const preset = AIRPORT_PRESETS[activePreset];
     pendingViewportFetch = true;
     map.flyTo(preset.center, preset.zoom, { duration: 0.7 });
-    return;
-  }
-
-  if (region === "korea") {
-    pendingViewportFetch = true;
-    map.flyTo([36.2, 127.8], 6, { duration: 0.7 });
     return;
   }
 
@@ -703,7 +760,7 @@ dom.trackLengthInput.addEventListener("input", () => {
   maxTrackPoints = Number(dom.trackLengthInput.value);
   dom.trackLengthLabel.textContent = `${maxTrackPoints}점`;
   pruneTracks();
-  renderTrackLine();
+  render();
   updateDetailPanel();
 });
 dom.limitInput.addEventListener("input", () => {
@@ -746,6 +803,7 @@ map.on("moveend", () => {
   }
 
   activePreset = "";
+  lastRenderedFlightIds = "";
   if (lastFetchMode === "initial") return;
   scheduleViewportFetch();
 });

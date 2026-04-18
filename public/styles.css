@@ -383,8 +383,8 @@ body {
 }
 
 .plane-marker {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -392,14 +392,14 @@ body {
 }
 
 .plane-marker svg {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   overflow: visible;
 }
 
 .plane-marker path {
   stroke: rgba(255, 255, 255, 0.9);
-  stroke-width: 1.2;
+  stroke-width: 1.1;
   stroke-linejoin: round;
 }
 
@@ -412,28 +412,31 @@ body {
 }
 
 .cluster-marker {
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   display: grid;
   place-items: center;
   border-radius: 999px;
-  color: #04131d;
+  color: #dff8ff;
   font-family: "Space Grotesk", sans-serif;
   font-weight: 700;
-  background: radial-gradient(circle at 30% 30%, #c8f5ff, #48d3ff 62%, #098ab0);
-  border: 2px solid rgba(255, 255, 255, 0.85);
+  background:
+    radial-gradient(circle at center, rgba(72, 211, 255, 0.2) 0 38%, transparent 39%),
+    radial-gradient(circle at center, rgba(72, 211, 255, 0.18) 0 62%, transparent 63%),
+    radial-gradient(circle at center, rgba(72, 211, 255, 0.9), rgba(8, 103, 138, 0.94));
+  border: 1px solid rgba(255, 255, 255, 0.45);
   box-shadow: 0 10px 22px rgba(0, 0, 0, 0.28);
 }
 
 .cluster-marker.small {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   font-size: 0.82rem;
 }
 
 .cluster-marker.large {
-  width: 46px;
-  height: 46px;
+  width: 50px;
+  height: 50px;
   font-size: 1rem;
 }
 
