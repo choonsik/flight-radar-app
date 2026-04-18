@@ -41,3 +41,15 @@ node server.js
 2. Render에서 `New +` → `Blueprint` 또는 `Web Service`를 선택합니다.
 3. 저장소를 연결하면 `buildCommand`, `startCommand`, `healthCheckPath`가 자동으로 적용됩니다.
 4. 배포가 끝나면 Render가 발급한 URL로 접속합니다.
+
+### Aviationstack 사용
+
+배포 환경에서 OpenSky 연결이 불안정할 경우 `AVIATIONSTACK_ACCESS_KEY` 환경 변수를 설정하면 Aviationstack 실시간 항공편 API를 우선 사용합니다.
+
+필요한 환경 변수:
+
+```bash
+AVIATIONSTACK_ACCESS_KEY=your_key_here
+```
+
+Render에서는 서비스 설정의 `Environment` 에서 같은 이름으로 추가하면 됩니다.

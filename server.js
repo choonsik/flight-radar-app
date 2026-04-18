@@ -8,6 +8,8 @@ const { URL } = require("url");
 const DEFAULT_PORT = Number(process.env.PORT) || 3030;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const OPENSKY_URL = "https://opensky-network.org/api/states/all";
+const AVIATIONSTACK_URL = "https://api.aviationstack.com/v1/flights";
+const AVIATIONSTACK_ACCESS_KEY = process.env.AVIATIONSTACK_ACCESS_KEY || "";
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -85,6 +87,38 @@ function normalizeState(state) {
   };
 }
 
+function normalizeAviationStackFlight(flight) {
+  const live = flight.live || {};
+  const airline = flight.airline || {};
+  const flightInfo = flight.flight || {};
+  const aircraft = flight.aircraft || {};
+
+  return {
+    icao24: (aircraft.icao24 || aircraft.registration || flightInfo.icao || flightInfo.iata || "").toLowerCase(),
+    callsign: (flightInfo.icao || flightInfo.iata || `${airline.icao || airline.iata || ""}${flightInfo.number || ""}`).trim(),
+    origin_country: airline.name || airline.icao || airline.iata || "Unknown",
+    time_position: live.updated ? Math.floor(new Date(live.updated).getTime() / 1000) : null,
+    last_contact: live.updated ? Math.floor(new Date(live.updated).getTime() / 1000) : null,
+    longitude: typeof live.longitude === "number" ? live.longitude : null,
+    latitude: typeof live.latitude === "number" ? live.latitude : null,
+    baro_altitude: typeof live.altitude === "number" ? live.altitude : null,
+    on_ground: Boolean(live.is_ground),
+    velocity: typeof live.speed_horizontal === "number" ? live.speed_horizontal / 3.6 : null,
+    true_track: typeof live.direction === "number" ? live.direction : null,
+    vertical_rate: typeof live.speed_vertical === "number" ? live.speed_vertical : null,
+    sensors: null,
+    geo_altitude: typeof live.altitude === "number" ? live.altitude : null,
+    squawk: null,
+    spi: false,
+    position_source: 0,
+    category: null,
+    departure_iata: flight.departure?.iata || null,
+    arrival_iata: flight.arrival?.iata || null,
+    airline_name: airline.name || null,
+    flight_number: flightInfo.number || null,
+  };
+}
+
 function withBounds(url, searchParams) {
   const lamin = searchParams.get("lamin");
   const lomin = searchParams.get("lomin");
@@ -103,14 +137,13 @@ function withBounds(url, searchParams) {
 
 async function handleFlights(res, requestUrl) {
   try {
-    const upstreamUrl = withBounds(new URL(OPENSKY_URL), requestUrl.searchParams);
-    const payload = await fetchOpenSkyJson(upstreamUrl);
-    const states = Array.isArray(payload.states) ? payload.states.map(normalizeState) : [];
+    const { payload, states, source } = await fetchProviderFlights(requestUrl);
 
     sendJson(res, 200, {
-      time: payload.time,
+      time: payload.time || Math.floor(Date.now() / 1000),
       count: states.length,
-      boundsApplied: upstreamUrl.searchParams.has("lamin"),
+      boundsApplied: hasBounds(requestUrl.searchParams),
+      source,
       states,
     });
   } catch (error) {
@@ -121,15 +154,86 @@ async function handleFlights(res, requestUrl) {
   }
 }
 
+async function fetchProviderFlights(requestUrl) {
+  if (AVIATIONSTACK_ACCESS_KEY) {
+    return fetchAviationStackFlights(requestUrl);
+  }
+
+  const upstreamUrl = withBounds(new URL(OPENSKY_URL), requestUrl.searchParams);
+  const payload = await fetchOpenSkyJson(upstreamUrl);
+  const states = Array.isArray(payload.states) ? payload.states.map(normalizeState) : [];
+
+  return {
+    payload,
+    states,
+    source: "opensky",
+  };
+}
+
+function hasBounds(searchParams) {
+  return ["lamin", "lomin", "lamax", "lomax"].every((key) => {
+    const value = searchParams.get(key);
+    return value !== null && value !== "";
+  });
+}
+
+function isWithinBounds(flight, searchParams) {
+  if (!hasBounds(searchParams)) return true;
+
+  const lamin = Number(searchParams.get("lamin"));
+  const lomin = Number(searchParams.get("lomin"));
+  const lamax = Number(searchParams.get("lamax"));
+  const lomax = Number(searchParams.get("lomax"));
+
+  return (
+    typeof flight.latitude === "number" &&
+    typeof flight.longitude === "number" &&
+    flight.latitude >= lamin &&
+    flight.latitude <= lamax &&
+    flight.longitude >= lomin &&
+    flight.longitude <= lomax
+  );
+}
+
+async function fetchAviationStackFlights(requestUrl) {
+  const upstreamUrl = new URL(AVIATIONSTACK_URL);
+  upstreamUrl.searchParams.set("access_key", AVIATIONSTACK_ACCESS_KEY);
+  upstreamUrl.searchParams.set("flight_status", "active");
+  upstreamUrl.searchParams.set("limit", "100");
+
+  const payload = await fetchJson(upstreamUrl, { providerName: "Aviationstack" });
+  const rawFlights = Array.isArray(payload.data) ? payload.data : [];
+  const states = rawFlights
+    .map(normalizeAviationStackFlight)
+    .filter((flight) => typeof flight.latitude === "number" && typeof flight.longitude === "number")
+    .filter((flight) => isWithinBounds(flight, requestUrl.searchParams));
+
+  return {
+    payload: {
+      time: Math.floor(Date.now() / 1000),
+    },
+    states,
+    source: "aviationstack",
+  };
+}
+
 function fetchOpenSkyJson(upstreamUrl) {
+  return fetchJson(upstreamUrl, { forceIPv4: true, providerName: "OpenSky" });
+}
+
+function fetchJson(upstreamUrl, options = {}) {
   return new Promise((resolve, reject) => {
     const req = https.request(
       upstreamUrl,
       {
         method: "GET",
-        family: 4,
-        lookup(hostname, options, callback) {
-          return dns.lookup(hostname, { ...options, family: 4 }, callback);
+        family: options.forceIPv4 ? 4 : undefined,
+        lookup(hostname, lookupOptions, callback) {
+          if (options.forceIPv4) {
+            return dns.lookup(hostname, { ...lookupOptions, family: 4 }, callback);
+          }
+
+          return dns.lookup(hostname, lookupOptions, callback);
         },
         headers: {
           "User-Agent": "flight-radar-app/1.0",
@@ -146,21 +250,21 @@ function fetchOpenSkyJson(upstreamUrl) {
 
         response.on("end", () => {
           if (response.statusCode < 200 || response.statusCode >= 300) {
-            reject(new Error(`OpenSky responded with ${response.statusCode}.`));
+            reject(new Error(`${options.providerName || "Upstream provider"} responded with ${response.statusCode}.`));
             return;
           }
 
           try {
             resolve(JSON.parse(body));
           } catch (error) {
-            reject(new Error("OpenSky returned invalid JSON."));
+            reject(new Error(`${options.providerName || "Upstream provider"} returned invalid JSON.`));
           }
         });
       }
     );
 
     req.setTimeout(12000, () => {
-      req.destroy(new Error("OpenSky request timed out."));
+      req.destroy(new Error(`${options.providerName || "Upstream provider"} request timed out.`));
     });
 
     req.on("error", (error) => {
