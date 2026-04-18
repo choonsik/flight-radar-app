@@ -107,7 +107,7 @@ function normalizeAirplanesLiveFlight(flight, now) {
   return {
     icao24: (flight.hex || "").replace(/^~/, "").toLowerCase(),
     callsign: (flight.flight || flight.r || "").trim(),
-    origin_country: flight.r || flight.t || "Unknown",
+    origin_country: flight.desc || flight.r || flight.t || "Unknown",
     time_position: seenPosSeconds !== null ? Math.floor(now - seenPosSeconds) : null,
     last_contact: seenSeconds !== null ? Math.floor(now - seenSeconds) : Math.floor(now),
     longitude: typeof flight.lon === "number" ? flight.lon : null,
@@ -337,8 +337,13 @@ async function fetchAirplanesLiveFlights(requestUrl) {
   const { lat, lon, radiusNm } = boundsToPointQuery(requestUrl.searchParams);
   const upstreamUrl = `${AIRPLANES_LIVE_URL}/point/${lat.toFixed(4)}/${lon.toFixed(4)}/${radiusNm}`;
   const payload = await fetchJson(upstreamUrl, { providerName: "Airplanes.live" });
-  const now = typeof payload.now === "number" ? payload.now : Math.floor(Date.now() / 1000);
-  const rawFlights = Array.isArray(payload.aircraft) ? payload.aircraft : [];
+  const nowRaw = typeof payload.now === "number" ? payload.now : Date.now();
+  const now = nowRaw > 10_000_000_000 ? Math.floor(nowRaw / 1000) : Math.floor(nowRaw);
+  const rawFlights = Array.isArray(payload.aircraft)
+    ? payload.aircraft
+    : Array.isArray(payload.ac)
+      ? payload.ac
+      : [];
   const states = rawFlights
     .map((flight) => normalizeAirplanesLiveFlight(flight, now))
     .filter((flight) => typeof flight.latitude === "number" && typeof flight.longitude === "number")
