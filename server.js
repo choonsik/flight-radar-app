@@ -1,6 +1,8 @@
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const path = require("path");
+const dns = require("dns");
 const { URL } = require("url");
 
 const DEFAULT_PORT = Number(process.env.PORT) || 3030;
@@ -102,22 +104,7 @@ function withBounds(url, searchParams) {
 async function handleFlights(res, requestUrl) {
   try {
     const upstreamUrl = withBounds(new URL(OPENSKY_URL), requestUrl.searchParams);
-    const response = await fetch(upstreamUrl, {
-      headers: {
-        "User-Agent": "flight-radar-app/1.0",
-        Accept: "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      sendJson(res, response.status, {
-        error: "Failed to fetch live flight data.",
-        details: `OpenSky responded with ${response.status}.`,
-      });
-      return;
-    }
-
-    const payload = await response.json();
+    const payload = await fetchOpenSkyJson(upstreamUrl);
     const states = Array.isArray(payload.states) ? payload.states.map(normalizeState) : [];
 
     sendJson(res, 200, {
@@ -132,6 +119,56 @@ async function handleFlights(res, requestUrl) {
       details: error.message,
     });
   }
+}
+
+function fetchOpenSkyJson(upstreamUrl) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      upstreamUrl,
+      {
+        method: "GET",
+        family: 4,
+        lookup(hostname, options, callback) {
+          return dns.lookup(hostname, { ...options, family: 4 }, callback);
+        },
+        headers: {
+          "User-Agent": "flight-radar-app/1.0",
+          Accept: "application/json",
+        },
+      },
+      (response) => {
+        let body = "";
+
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          body += chunk;
+        });
+
+        response.on("end", () => {
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            reject(new Error(`OpenSky responded with ${response.statusCode}.`));
+            return;
+          }
+
+          try {
+            resolve(JSON.parse(body));
+          } catch (error) {
+            reject(new Error("OpenSky returned invalid JSON."));
+          }
+        });
+      }
+    );
+
+    req.setTimeout(12000, () => {
+      req.destroy(new Error("OpenSky request timed out."));
+    });
+
+    req.on("error", (error) => {
+      reject(error);
+    });
+
+    req.end();
+  });
 }
 
 const server = http.createServer(async (req, res) => {
