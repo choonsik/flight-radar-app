@@ -1,7 +1,7 @@
 const map = L.map("map", {
   zoomControl: true,
   minZoom: 2,
-}).setView([25, 10], 2.2);
+}).setView([36.2, 127.8], 6);
 
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 12,
@@ -91,6 +91,7 @@ let suppressViewportFetch = false;
 let autoRefreshTimer = null;
 let activePreset = "";
 let maxTrackPoints = Number(dom.trackLengthInput.value);
+let pendingViewportFetch = false;
 const flightTracks = new Map();
 
 const MOVE_FETCH_DELAY_MS = 450;
@@ -578,13 +579,13 @@ function updateViewport(flights) {
 
   if (activePreset && AIRPORT_PRESETS[activePreset]) {
     const preset = AIRPORT_PRESETS[activePreset];
-    suppressViewportFetch = true;
+    pendingViewportFetch = true;
     map.flyTo(preset.center, preset.zoom, { duration: 0.7 });
     return;
   }
 
   if (region === "korea") {
-    suppressViewportFetch = true;
+    pendingViewportFetch = true;
     map.flyTo([36.2, 127.8], 6, { duration: 0.7 });
     return;
   }
@@ -687,6 +688,13 @@ dom.flightCodeInput.addEventListener("input", render);
 dom.regionSelect.addEventListener("change", () => {
   activePreset = "";
   lastRenderedFlightIds = "";
+  if (dom.regionSelect.value === "korea") {
+    pendingViewportFetch = true;
+    map.setView([36.2, 127.8], 6);
+    render();
+    return;
+  }
+
   render();
   fetchFlights("viewport");
 });
@@ -719,14 +727,19 @@ dom.presetButtons.forEach((button) => {
     activePreset = button.dataset.preset;
     dom.regionSelect.value = "korea";
     lastRenderedFlightIds = "";
-    suppressViewportFetch = true;
+    pendingViewportFetch = true;
     map.flyTo(preset.center, preset.zoom, { duration: 0.7 });
     render();
-    fetchFlights("viewport");
   });
 });
 
 map.on("moveend", () => {
+  if (pendingViewportFetch) {
+    pendingViewportFetch = false;
+    fetchFlights("viewport");
+    return;
+  }
+
   if (suppressViewportFetch) {
     suppressViewportFetch = false;
     return;
