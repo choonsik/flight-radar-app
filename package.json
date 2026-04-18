@@ -1,0 +1,9 @@
+{
+  "name": "global-flight-pulse",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A simple live world flight tracking app.",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
