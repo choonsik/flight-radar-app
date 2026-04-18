@@ -10,6 +10,13 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const OPENSKY_URL = "https://opensky-network.org/api/states/all";
 const AVIATIONSTACK_URL = "https://api.aviationstack.com/v1/flights";
 const AVIATIONSTACK_ACCESS_KEY = process.env.AVIATIONSTACK_ACCESS_KEY || "";
+const KOREA_AIRPORT_CODES = ["ICN", "GMP", "CJU", "PUS", "TAE", "CJJ"];
+const KOREA_BOUNDS = {
+  minLat: 32.5,
+  maxLat: 39.8,
+  minLon: 124,
+  maxLon: 132.5,
+};
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -137,13 +144,14 @@ function withBounds(url, searchParams) {
 
 async function handleFlights(res, requestUrl) {
   try {
-    const { payload, states, source } = await fetchProviderFlights(requestUrl);
+    const { payload, states, source, strategy } = await fetchProviderFlights(requestUrl);
 
     sendJson(res, 200, {
       time: payload.time || Math.floor(Date.now() / 1000),
       count: states.length,
       boundsApplied: hasBounds(requestUrl.searchParams),
       source,
+      strategy,
       states,
     });
   } catch (error) {
@@ -167,6 +175,7 @@ async function fetchProviderFlights(requestUrl) {
     payload,
     states,
     source: "opensky",
+    strategy: "bbox",
   };
 }
 
@@ -195,18 +204,64 @@ function isWithinBounds(flight, searchParams) {
   );
 }
 
-async function fetchAviationStackFlights(requestUrl) {
-  const upstreamUrl = new URL(AVIATIONSTACK_URL);
-  upstreamUrl.searchParams.set("access_key", AVIATIONSTACK_ACCESS_KEY);
-  upstreamUrl.searchParams.set("flight_status", "active");
-  upstreamUrl.searchParams.set("limit", "100");
+function looksLikeKoreaBounds(searchParams) {
+  if (!hasBounds(searchParams)) return false;
 
-  const payload = await fetchJson(upstreamUrl, { providerName: "Aviationstack" });
-  const rawFlights = Array.isArray(payload.data) ? payload.data : [];
-  const states = rawFlights
-    .map(normalizeAviationStackFlight)
-    .filter((flight) => typeof flight.latitude === "number" && typeof flight.longitude === "number")
-    .filter((flight) => isWithinBounds(flight, requestUrl.searchParams));
+  const lamin = Number(searchParams.get("lamin"));
+  const lomin = Number(searchParams.get("lomin"));
+  const lamax = Number(searchParams.get("lamax"));
+  const lomax = Number(searchParams.get("lomax"));
+
+  return (
+    lamin >= KOREA_BOUNDS.minLat - 2 &&
+    lamax <= KOREA_BOUNDS.maxLat + 2 &&
+    lomin >= KOREA_BOUNDS.minLon - 4 &&
+    lomax <= KOREA_BOUNDS.maxLon + 4
+  );
+}
+
+function dedupeFlights(flights) {
+  const uniqueFlights = new Map();
+
+  flights.forEach((flight) => {
+    const key = flight.icao24 || flight.callsign || `${flight.latitude}:${flight.longitude}`;
+    const existing = uniqueFlights.get(key);
+
+    if (!existing || (flight.last_contact || 0) > (existing.last_contact || 0)) {
+      uniqueFlights.set(key, flight);
+    }
+  });
+
+  return [...uniqueFlights.values()];
+}
+
+async function fetchAviationStackFlights(requestUrl) {
+  const useKoreaStrategy = looksLikeKoreaBounds(requestUrl.searchParams);
+  const requests = useKoreaStrategy
+    ? KOREA_AIRPORT_CODES.flatMap((airportCode) => [
+        { dep_iata: airportCode, flight_status: "active", limit: "100" },
+        { arr_iata: airportCode, flight_status: "active", limit: "100" },
+      ])
+    : [{ flight_status: "active", limit: "100" }];
+
+  const payloads = await Promise.all(
+    requests.map((params) => {
+      const upstreamUrl = new URL(AVIATIONSTACK_URL);
+      upstreamUrl.searchParams.set("access_key", AVIATIONSTACK_ACCESS_KEY);
+      Object.entries(params).forEach(([key, value]) => {
+        upstreamUrl.searchParams.set(key, value);
+      });
+      return fetchJson(upstreamUrl, { providerName: "Aviationstack" });
+    })
+  );
+
+  const rawFlights = payloads.flatMap((payload) => (Array.isArray(payload.data) ? payload.data : []));
+  const states = dedupeFlights(
+    rawFlights
+      .map(normalizeAviationStackFlight)
+      .filter((flight) => typeof flight.latitude === "number" && typeof flight.longitude === "number")
+      .filter((flight) => isWithinBounds(flight, requestUrl.searchParams))
+  );
 
   return {
     payload: {
@@ -214,6 +269,7 @@ async function fetchAviationStackFlights(requestUrl) {
     },
     states,
     source: "aviationstack",
+    strategy: useKoreaStrategy ? "korea-airports" : "active-flights",
   };
 }
 

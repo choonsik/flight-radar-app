@@ -115,6 +115,22 @@ function metersPerSecondToKnots(value) {
   return `${Math.round(value * 1.94384)} kt`;
 }
 
+function describeSource(payload) {
+  if (payload.source === "aviationstack" && payload.strategy === "korea-airports") {
+    return "Aviationstack 한국 공항 출발/도착 편";
+  }
+
+  if (payload.source === "aviationstack") {
+    return "Aviationstack active 편";
+  }
+
+  if (payload.source === "opensky") {
+    return "OpenSky 실시간 위치";
+  }
+
+  return "실시간 공급원";
+}
+
 function currentBoundsParams() {
   const bounds = map.getBounds();
   return new URLSearchParams({
@@ -643,7 +659,7 @@ async function fetchFlights(mode = "manual") {
     updateTracks(allFlights);
     syncSelectedFlight();
     dom.updatedAt.textContent = formatDate(payload.time);
-    dom.statusText.textContent = `현재 지도 범위에서 ${formatNumber(payload.count)}대의 항공기를 불러왔습니다.`;
+    dom.statusText.textContent = `${describeSource(payload)} 기준으로 현재 지도 범위에서 ${formatNumber(payload.count)}대의 항공기를 불러왔습니다.`;
     render();
   } catch (error) {
     dom.statusText.textContent = `실시간 데이터 연결에 실패했습니다. ${error.message}`;
