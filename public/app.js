@@ -639,20 +639,6 @@ function updatePresetButtons() {
   });
 }
 
-function updateViewport(flights) {
-  if (activePreset && AIRPORT_PRESETS[activePreset]) {
-    const preset = AIRPORT_PRESETS[activePreset];
-    pendingViewportFetch = true;
-    map.flyTo(preset.center, preset.zoom, { duration: 0.7 });
-    return;
-  }
-
-  if (!flights.length) {
-    suppressViewportFetch = true;
-    map.flyTo([25, 10], 2.2, { duration: 0.7 });
-  }
-}
-
 function render() {
   const flights = filteredFlights();
   renderStats(flights);
@@ -660,7 +646,6 @@ function render() {
   renderMap(flights);
   updateDetailPanel();
   updatePresetButtons();
-  updateViewport(flights);
 }
 
 function updateTracks(flights) {
